@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow? {
         NSApp.windows.first { $0.identifier?.rawValue.hasSuffix("main") == true && !($0 is NSPanel) }
     }
+    @ObservationIgnored private var handoff: CascadeHandoff?
     @ObservationIgnored private var statusItem: NSStatusItem?
     /// What the status glyph is currently painted with, and the menu bar thickness it was drawn
     /// for, so it is repainted only when one of them changes.
@@ -61,6 +62,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let other = runningCopy { yield(to: other); return }
+        // Before anything opens Craft's data: installing Cascade quits Craft, and Cascade then
+        // carries that data across. Put off or failed, Craft launches as it always has.
+        if let handoff = CascadeHandoff.current() {
+            self.handoff = handoff
+            handoff.begin { [weak self] in self?.finishLaunching() }
+            return
+        }
+        finishLaunching()
+    }
+
+    private func finishLaunching() {
         model.shell.applyAppearance()
         // SwiftUI can have made the window key before this runs, so cover both orders.
         NotificationCenter.default.addObserver(self, selector: #selector(windowDidBecomeKey),
