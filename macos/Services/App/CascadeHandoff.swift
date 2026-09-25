@@ -47,7 +47,7 @@ final class CascadeHandoff {
                 let cascade = try await self.install()
                 self.closeProgress()
                 self.quit(openingAfterwards: cascade)
-            } catch is CancellationError {
+            } catch where Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
                 self.closeProgress()
                 continueWithCraft()
             } catch {
@@ -102,25 +102,30 @@ final class CascadeHandoff {
 
     // MARK: - Leaving
 
-    /// Quits through the normal quit contract, which stops the terminal daemon, and opens Cascade
-    /// only once this process has gone. Cascade gives way to a Craft that is still running, and
-    /// carries its data only once it has quit.
+    /// Leaves without the quit contract: nothing was started, and that contract stops the terminal
+    /// daemon, which Cascade shares with Craft and may be using right now. Cascade opens only once
+    /// this process has gone, since it gives way to a Craft that is still running and carries its
+    /// data only once Craft has quit.
     private func quit(openingAfterwards cascade: URL) {
+        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleIdentifier)
+            .first(where: { !$0.isTerminated }) {
+            running.activate()
+            exit(0)
+        }
         let waiter = Process()
         waiter.executableURL = URL(fileURLWithPath: "/bin/sh")
-        // Detached so it outlives Craft. It gives up after two minutes: a quit that failed leaves
-        // Craft running, and Cascade would only give way to it again.
+        // Detached so it outlives Craft, which exits straight after starting it.
         waiter.arguments = ["-c", """
-            (i=0; while kill -0 "$1" 2>/dev/null; do i=$((i+1)); [ $i -gt 600 ] && exit 0; sleep 0.2; done
-             /usr/bin/open "$2") >/dev/null 2>&1 &
+            (while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; /usr/bin/open "$2") >/dev/null 2>&1 &
             """, "sh", String(ProcessInfo.processInfo.processIdentifier), cascade.path]
         do {
             try waiter.run()
             waiter.waitUntilExit()
         } catch {
+            // Without the waiter, show Cascade where it was installed and let the user open it.
             NSWorkspace.shared.activateFileViewerSelecting([cascade])
         }
-        NSApp.terminate(nil)
+        exit(0)
     }
 
     private func failed(_ error: Error, continueWithCraft: @escaping @MainActor () -> Void) {
