@@ -27,6 +27,12 @@ final class CascadeHandoff {
     /// Opens an installed Cascade, or offers to install it. `continueWithCraft` finishes Craft's own
     /// launch when the user puts the move off or it cannot be done.
     func begin(continueWithCraft: @escaping @MainActor () -> Void) {
+        // A running Cascade shares Craft's terminal daemon, so Craft never runs beside it.
+        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleIdentifier)
+            .first(where: { !$0.isTerminated }), let url = running.bundleURL {
+            quit(openingAfterwards: url)
+            return
+        }
         if let installed = installedCascade() { quit(openingAfterwards: installed); return }
         let alert = NSAlert()
         alert.messageText = "Craft is now Cascade"
@@ -107,14 +113,11 @@ final class CascadeHandoff {
     /// this process has gone, since it gives way to a Craft that is still running and carries its
     /// data only once Craft has quit.
     private func quit(openingAfterwards cascade: URL) {
-        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleIdentifier)
-            .first(where: { !$0.isTerminated }) {
-            running.activate()
-            exit(0)
-        }
         let waiter = Process()
         waiter.executableURL = URL(fileURLWithPath: "/bin/sh")
-        // Detached so it outlives Craft, which exits straight after starting it.
+        // Detached so it outlives Craft, which exits straight after starting it. Opening a Cascade
+        // that is already running only brings it forward, and one that was giving way to Craft
+        // opens again once Craft has gone.
         waiter.arguments = ["-c", """
             (while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; /usr/bin/open "$2") >/dev/null 2>&1 &
             """, "sh", String(ProcessInfo.processInfo.processIdentifier), cascade.path]
